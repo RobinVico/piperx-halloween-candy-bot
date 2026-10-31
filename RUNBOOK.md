@@ -55,6 +55,13 @@
 
 映射参数保存在 `teleop/mapping_config.json`（底座零点 -19.2 已校准）。
 
+## 相机（Orbbec Dabai DC1）
+- 彩色：标准 USB 摄像头，OpenCV 索引 **1**（0 是笔记本自带）。`tools\camera_preview.py`
+- 深度：需要 **Orbbec SensorDriver**（已装，`drivers\orbbec\driver\...\SensorDriver_V4.3.0.22.exe`）+ OpenNI2 SDK（已解压在 `drivers\orbbec\openni_sdk`），Python 用 `openni` 包。
+- 彩色+深度并排预览：`.venv\Scripts\python.exe tools\rgbd_preview.py`（鼠标放在深度图上显示距离，S 截图到 `captures\`）
+- 注意：`pyorbbecsdk2`（Orbbec SDK v2 Python）不支持这台相机（OpenNI 协议），会崩溃，别用。
+- `drivers\` 不在 git 里；换电脑需重新从 https://www.orbbec.com/developers/openni-sdk/ 下载驱动和 Windows OpenNI SDK。
+
 ## 常见问题
 | 现象 | 处理 |
 |---|---|
