@@ -287,8 +287,12 @@ class CandyBot:
     def _sp(self, base):
         return base * self.args.speed_scale
 
-    def _go(self, name, grip=None, speed=25.0):
-        self.arm.move(wp.q(self.wps, name), grip=grip, speed=self._sp(speed), check=self._check)
+    def _check_estop(self):
+        if self.estop_evt.is_set():
+            raise Aborted("急停")
+
+    def _go(self, name, grip=None, speed=25.0, check=None):
+        self.arm.move(wp.q(self.wps, name), grip=grip, speed=self._sp(speed), check=check or self._check)
 
     def _pick(self) -> bool:
         grasps = wp.grasp_names(self.wps)
@@ -391,12 +395,17 @@ class CandyBot:
             self.done.set()
 
     def _finish(self):
-        self.finish_evt.clear()
         if self.arm is None or not self.arm.enabled:
             self.say("STOPPED", "已结束")
             return
         self.say("HOMING", "回休息位后失能…")
-        self._go("home", grip=self.wps["home"]["grip"], speed=15)
+        try:
+            # Only an e-stop may interrupt this: closing the panel re-sends "finish" and must not
+            # cancel the trip home (otherwise the arm would stay up, enabled).
+            self._go("home", grip=self.wps["home"]["grip"], speed=15, check=self._check_estop)
+        except Aborted as e:
+            self.say("ESTOP", f"回休息位时停止：{e}。托住机械臂；恢复需断电重启。")
+            return
         time.sleep(0.5)
         self.arm.disable()
         self.say("STOPPED", f"已回休息位并失能。今天共发出 {self.given} 颗糖。")
