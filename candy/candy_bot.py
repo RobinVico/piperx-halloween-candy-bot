@@ -54,6 +54,7 @@ class ArmExec:
         self.track_err_stop = track_err_stop
         self.q_cmd, self.g_cmd = self.flt.q.copy(), self.flt.grip
         self.q_fb, self.g_fb = self.q_cmd.copy(), self.g_cmd
+        self.g_effort = 0.0
         self.enabled = False
         self.fault = None
         self.lock = threading.Lock()
@@ -87,6 +88,7 @@ class ArmExec:
                     if self.enabled and self.fault is None:
                         self.arm.command(q, g, self.speed_pct)
                     self.q_fb, self.g_fb = self.arm.joints_deg(), self.arm.gripper_mm()
+                    self.g_effort = self.arm.piper.GetArmGripperMsgs().gripper_state.grippers_effort / 1000.0
                     err = float(np.max(np.abs(q - self.q_fb)))
                     if self.enabled and err > self.track_err_stop:
                         bad_since = bad_since or time.perf_counter()
@@ -303,9 +305,12 @@ class CandyBot:
             self._go(g, grip=GRIP_OPEN_MM, speed=15)
             self.arm.grip(0.0, settle=1.0, check=self._check)
             width = self.arm.g_fb if self.args.live else 15.0
+            effort = self.arm.g_effort
             self._go("box_above", speed=15)
-            if width > EMPTY_GRIP_MM:
-                self.say(msg=f"夹到了（夹爪开口 {width:.1f} mm）")
+            # The PiPER X gripper position feedback looked stuck (-0.8 mm even when open), so by default
+            # assume the grasp worked; --grip-check re-enables the width test.
+            if not self.args.grip_check or width > EMPTY_GRIP_MM:
+                self.say(msg=f"夹糖完成（夹爪反馈：开口 {width:.1f} mm，力 {effort:.2f}）")
                 return True
             self.misses += 1
             self.say(msg=f"没夹到（开口 {width:.1f} mm），换下一个抓取点")
@@ -525,7 +530,10 @@ def run_panel(bot: CandyBot):
             if wf is not None:
                 show(wrist_lbl, wf)
             xyz = "" if v.palm_xyz is None else "  手掌位置(相机坐标) x=%.2f y=%.2f z=%.2f m" % tuple(v.palm_xyz)
-            info.config(text=f"触发相机 {v.fps:4.1f} fps{xyz}" + (f"   ⚠ {v.error}" if v.error else ""))
+            grip = ""
+            if bot.arm is not None:
+                grip = f"   夹爪 指令 {bot.arm.g_cmd:4.1f} mm / 反馈 {bot.arm.g_fb:5.1f} mm, 力 {bot.arm.g_effort:4.2f}"
+            info.config(text=f"触发相机 {v.fps:4.1f} fps{xyz}{grip}" + (f"   ⚠ {v.error}" if v.error else ""))
         if bot.arm is not None and view["v"] is not None and bot.arm.view_pose is not None:
             try:
                 if view["v"].is_running():
@@ -564,6 +572,8 @@ def main():
     ap.add_argument("--max-acc", type=float, default=120.0)
     ap.add_argument("--speed-pct", type=int, default=50)
     ap.add_argument("--max-attempts", type=int, default=3, help="grasp retries before giving up")
+    ap.add_argument("--grip-check", action="store_true",
+                    help="treat a gripper closed below 3 mm as an empty grasp and retry (needs working feedback)")
     ap.add_argument("--track-err-stop", type=float, default=20.0)
     ap.add_argument("--no-viewer", action="store_true")
     ap.add_argument("--waypoints", default=None, help="waypoints json (default candy/waypoints.json)")
