@@ -152,6 +152,10 @@ class PalmTrigger:
         """An open palm was seen in the ROI in the last update (and the hold timer is running)."""
         return self.palm is not None and self._since is not None and now - (self._last_seen or 0) <= within_s
 
+    def hand_present(self, now: float, within_s: float = 0.25) -> bool:
+        """Any hand (open or not) was seen inside the ROI within the last within_s seconds."""
+        return self._last_seen is not None and now - self._last_seen <= within_s
+
     def hand_gone(self, now: float, clear_s: float = 1.5) -> bool:
         """No hand of any kind inside the ROI for clear_s seconds."""
         return self._last_seen is None or now - self._last_seen >= clear_s

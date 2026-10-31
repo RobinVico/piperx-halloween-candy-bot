@@ -301,12 +301,12 @@ class CandyBot:
         for attempt in range(self.args.max_attempts):
             g = grasps[(self.misses + attempt) % len(grasps)]
             self.say("PICK", f"夹糖：第 {attempt + 1} 次（{g}）")
-            self._go("box_above", grip=GRIP_OPEN_MM, speed=30)
-            self._go(g, grip=GRIP_OPEN_MM, speed=15)
-            self.arm.grip(0.0, settle=1.0, check=self._check)
+            self._go("box_above", grip=GRIP_OPEN_MM, speed=45)
+            self._go(g, grip=GRIP_OPEN_MM, speed=25)
+            self.arm.grip(0.0, settle=0.6, check=self._check)
             width = self.arm.g_fb if self.args.live else 15.0
             effort = self.arm.g_effort
-            self._go("box_above", speed=15)
+            self._go("box_above", speed=25)
             # The PiPER X gripper position feedback looked stuck (-0.8 mm even when open), so by default
             # assume the grasp worked; --grip-check re-enables the width test.
             if not self.args.grip_check or width > EMPTY_GRIP_MM:
@@ -316,19 +316,18 @@ class CandyBot:
             self.say(msg=f"没夹到（开口 {width:.1f} mm），换下一个抓取点")
         return False
 
-    def _wait_palm(self, timeout: float, stable_s: float = 0.3) -> bool:
-        """True once an open palm has been seen in the hand-off zone continuously for stable_s."""
-        t0, since = time.time(), None
-        while time.time() - t0 < timeout:
+    def _wait_hand(self, timeout: float, stable_s: float = 0.3) -> bool:
+        """True once any hand (fingers need not be open) has been in the hand-off zone for stable_s."""
+        t0, since = time.perf_counter(), None
+        while (now := time.perf_counter()) - t0 < timeout:
             self._check()
-            if self.vision.trigger.palm is not None:
-                since = since or time.time()
-                if time.time() - since >= stable_s:
+            if self.vision.trigger.hand_present(now):
+                since = since or now
+                if now - since >= stable_s:
                     return True
             else:
                 since = None
-            left = timeout - (time.time() - t0)
-            self.say(msg=f"拿着糖等手掌伸到下面…（{left:.0f} s）")
+            self.say(msg=f"拿着糖等手伸到下面…（{timeout - (now - t0):.0f} s）")
             time.sleep(0.03)
         return False
 
@@ -336,21 +335,21 @@ class CandyBot:
         self.say("DELIVER", "送到递糖区")
         if "transit" in self.wps:
             self._go("transit", speed=30)
-        self._go("handoff_above", speed=20)
-        if not self._wait_palm(self.args.release_wait):
+        self._go("handoff_above", speed=30)
+        if not self._wait_hand(self.args.release_wait):
             # Nobody is there any more: keep the candy and give it to the next open palm.
-            self.say(msg="没有等到手掌，拿着糖回休息位，下次直接递")
+            self.say(msg="没有等到手，拿着糖回休息位，下次直接递")
             if "transit" in self.wps:
-                self._go("transit", speed=30)
-            self._go("home", speed=30)
+                self._go("transit", speed=45)
+            self._go("home", speed=45)
             return
-        self.arm.grip(GRIP_OPEN_MM, settle=1.0, check=self._check)
+        self.arm.grip(GRIP_OPEN_MM, settle=0.6, check=self._check)
         self.holding = False
         self.given += 1
         self.say(msg=f"已发出第 {self.given} 颗糖 🍬")
         if "transit" in self.wps:
-            self._go("transit", speed=30)
-        self._go("home", grip=GRIP_OPEN_MM / 2, speed=30)
+            self._go("transit", speed=45)
+        self._go("home", grip=GRIP_OPEN_MM / 2, speed=45)
 
     def _cycle(self):
         if not self.holding:
@@ -592,7 +591,7 @@ def main():
                     help="hand-off zone in the trigger image, normalised 0..1 (default: whole image)")
     ap.add_argument("--hold-s", type=float, default=0.8, help="open palm must be held this long to trigger")
     ap.add_argument("--speed-scale", type=float, default=1.0, help="multiplies all waypoint speeds")
-    ap.add_argument("--max-acc", type=float, default=120.0)
+    ap.add_argument("--max-acc", type=float, default=200.0)
     ap.add_argument("--speed-pct", type=int, default=50)
     ap.add_argument("--max-attempts", type=int, default=3, help="grasp retries before giving up")
     ap.add_argument("--release-wait", type=float, default=15.0,
