@@ -253,6 +253,7 @@ class CandyBot:
         self.start_evt = threading.Event()
         self.pause_evt = threading.Event()
         self.finish_evt = threading.Event()
+        self.exit_evt = threading.Event()  # window closed: finish and leave
         self.estop_evt = threading.Event()
         self.done = threading.Event()
         self.arm: ArmExec | None = None
@@ -378,14 +379,37 @@ class CandyBot:
                 self.say("WAIT_START", "⚠ 机械臂不在休息位附近（差 > 15°）。开始后会先慢慢移到休息位。")
             else:
                 self.say("WAIT_START", "准备好了，点“开始”")
-            while not self.start_evt.is_set():
-                if self.finish_evt.is_set() or self.estop_evt.is_set():
+
+            # Sessions: start -> serve candy -> finish (home + disable) -> back to WAIT_START.
+            # Only closing the window (exit_evt) leaves; an e-stop ends everything (power-cycle needed).
+            while True:
+                self.start_evt.clear()
+                while not self.start_evt.is_set():
+                    if self.exit_evt.is_set() or self.estop_evt.is_set():
+                        return
+                    self.finish_evt.clear()  # "finish" while not running means nothing
+                    time.sleep(0.05)
+                if not self._session():
                     return
-                time.sleep(0.05)
+                if self.exit_evt.is_set():
+                    return
+                self.say("WAIT_START", f"已回休息位并失能（共发出 {self.given} 颗糖）。点“开始”可以继续。")
+        except Exception as e:  # noqa: BLE001
+            if self.arm:
+                self.arm.emergency_stop(str(e))
+            self.say("ERROR", f"{type(e).__name__}: {e}")
+            raise
+        finally:
+            if self.vision:
+                self.vision.armed = False
+            self.done.set()
+
+    def _session(self) -> bool:
+        """One enabled run until "finish". Returns False if it ended in an e-stop."""
+        try:
             self.arm.enable()
             self.say("HOMING", "移动到休息位")
             self._go("home", grip=GRIP_OPEN_MM / 2, speed=15)
-
             while True:
                 try:
                     self.say("IDLE", "等待摊开的手掌…" + ("（手里还拿着一颗糖）" if self.holding else ""))
@@ -407,24 +431,15 @@ class CandyBot:
                         continue
                     raise
         except Aborted as e:
+            self.vision.armed = False
             if str(e) == "finish":
-                self._finish()
-            else:
-                self.say("ESTOP", f"已停止：{e}。托住机械臂；恢复需断电重启。")
-        except Exception as e:  # noqa: BLE001
-            if self.arm:
-                self.arm.emergency_stop(str(e))
-            self.say("ERROR", f"{type(e).__name__}: {e}")
-            raise
-        finally:
-            if self.vision:
-                self.vision.armed = False
-            self.done.set()
+                return self._finish()
+            self.say("ESTOP", f"已停止：{e}。托住机械臂；恢复需断电重启。")
+            return False
 
-    def _finish(self):
+    def _finish(self) -> bool:
         if self.arm is None or not self.arm.enabled:
-            self.say("STOPPED", "已结束")
-            return
+            return True
         self.say("HOMING", "回休息位后失能…")
         try:
             # Only an e-stop may interrupt this: closing the panel re-sends "finish" and must not
@@ -432,10 +447,12 @@ class CandyBot:
             self._go("home", grip=self.wps["home"]["grip"], speed=15, check=self._check_estop)
         except Aborted as e:
             self.say("ESTOP", f"回休息位时停止：{e}。托住机械臂；恢复需断电重启。")
-            return
+            return False
         time.sleep(0.5)
         self.arm.disable()
-        self.say("STOPPED", f"已回休息位并失能。今天共发出 {self.given} 颗糖。")
+        self.finish_evt.clear()
+        self.say("STOPPED", f"已回休息位并失能。共发出 {self.given} 颗糖。")
+        return True
 
     def close(self):
         if self.vision:
@@ -569,6 +586,7 @@ def run_panel(bot: CandyBot):
             if not messagebox.askyesno("关闭", "关闭面板后，机械臂会先回休息位再失能（最多 30 秒）。\n确定关闭吗？"):
                 return
         bot.pause_evt.clear()
+        bot.exit_evt.set()
         bot.finish_evt.set()
         root.destroy()
 
@@ -608,6 +626,7 @@ def main():
     try:
         run_panel(bot)
     finally:
+        bot.exit_evt.set()
         bot.finish_evt.set()
         bot.done.wait(timeout=30.0 if args.live else 3.0)
         bot.close()
