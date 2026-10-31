@@ -316,11 +316,34 @@ class CandyBot:
             self.say(msg=f"没夹到（开口 {width:.1f} mm），换下一个抓取点")
         return False
 
+    def _wait_palm(self, timeout: float, stable_s: float = 0.3) -> bool:
+        """True once an open palm has been seen in the hand-off zone continuously for stable_s."""
+        t0, since = time.time(), None
+        while time.time() - t0 < timeout:
+            self._check()
+            if self.vision.trigger.palm is not None:
+                since = since or time.time()
+                if time.time() - since >= stable_s:
+                    return True
+            else:
+                since = None
+            left = timeout - (time.time() - t0)
+            self.say(msg=f"拿着糖等手掌伸到下面…（{left:.0f} s）")
+            time.sleep(0.03)
+        return False
+
     def _deliver(self):
         self.say("DELIVER", "送到递糖区")
         if "transit" in self.wps:
             self._go("transit", speed=30)
         self._go("handoff_above", speed=20)
+        if not self._wait_palm(self.args.release_wait):
+            # Nobody is there any more: keep the candy and give it to the next open palm.
+            self.say(msg="没有等到手掌，拿着糖回休息位，下次直接递")
+            if "transit" in self.wps:
+                self._go("transit", speed=30)
+            self._go("home", speed=30)
+            return
         self.arm.grip(GRIP_OPEN_MM, settle=1.0, check=self._check)
         self.holding = False
         self.given += 1
@@ -572,6 +595,8 @@ def main():
     ap.add_argument("--max-acc", type=float, default=120.0)
     ap.add_argument("--speed-pct", type=int, default=50)
     ap.add_argument("--max-attempts", type=int, default=3, help="grasp retries before giving up")
+    ap.add_argument("--release-wait", type=float, default=15.0,
+                    help="seconds to wait above the hand-off zone for an open palm before taking the candy back")
     ap.add_argument("--grip-check", action="store_true",
                     help="treat a gripper closed below 3 mm as an empty grasp and retry (needs working feedback)")
     ap.add_argument("--track-err-stop", type=float, default=20.0)
