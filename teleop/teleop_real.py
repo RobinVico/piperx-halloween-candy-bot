@@ -42,6 +42,7 @@ class Status:
     q_cmd: np.ndarray = field(default_factory=lambda: np.zeros(6))
     q_fb: np.ndarray = field(default_factory=lambda: np.zeros(6))
     g_cmd: float = 0.0
+    g_fb: float = 0.0
     track_err: float = 0.0
     leader_age: float = 0.0
     enabled: list = field(default_factory=lambda: [False] * 6)
@@ -222,7 +223,9 @@ class Teleop:
                         if not view.is_running():
                             view = None
 
-                    self._set(q_cmd=q_cmd, q_fb=q_fb, g_cmd=g_cmd, track_err=track_err, loop_ms=dt * 1000)
+                    g_fb = arm.gripper_mm() if a.live else g_cmd
+                    self._set(q_cmd=q_cmd, q_fb=q_fb if a.live else q_cmd, g_cmd=g_cmd, g_fb=g_fb,
+                              track_err=track_err, loop_ms=dt * 1000)
                     now = time.perf_counter()
                     if now - last_slow > 0.25:  # slower-changing info
                         last_slow = now
@@ -264,7 +267,7 @@ def run_panel(t: Teleop):
     root.title(("真机 LIVE" if live else "DRY RUN") + " · Piper X 紧急控制面板")
     root.attributes("-topmost", True)
     root.configure(bg="#1e1e1e")
-    root.geometry("560x780+40+40")
+    root.geometry("620x830+40+40")
     fg, bg = "#eeeeee", "#1e1e1e"
     big = ("Microsoft YaHei UI", 14, "bold")
     mono = ("Consolas", 12)
@@ -319,6 +322,39 @@ def run_panel(t: Teleop):
                           fg="white", relief="flat", font=("Microsoft YaHei UI", 11, "bold"), command=calib_base)
     calib_btn.pack(fill="x", padx=12, pady=(8, 0))
 
+    # ---- teach waypoints for the candy bot
+    from tkinter import ttk
+
+    from candy import waypoints as wp
+
+    teach = tk.Frame(root, bg=bg)
+    teach.pack(fill="x", padx=12, pady=(8, 0))
+    tk.Label(teach, text="记录点位", font=("Microsoft YaHei UI", 10, "bold"), fg=fg, bg=bg).pack(side="left")
+    wp_name = ttk.Combobox(teach, values=list(wp.PRESETS), width=14, font=("Consolas", 11))
+    wp_name.set("home")
+    wp_name.pack(side="left", padx=6)
+    wp_hint = tk.Label(teach, text=wp.PRESETS["home"], font=("Microsoft YaHei UI", 9), fg="#aaaaaa", bg=bg)
+
+    def on_wp_select(_=None):
+        wp_hint.config(text=wp.PRESETS.get(wp_name.get(), ""))
+
+    def record_wp():
+        s = t.snapshot()
+        name = wp_name.get().strip()
+        if not name or s.phase not in ("FOLLOWING", "PAUSED"):
+            return
+        wp.save_point(name, s.q_fb, s.g_fb)
+        done = wp.load()
+        miss = wp.missing(done)
+        t._set(message=f"已记录点位 '{name}'：" + " ".join(f"{v:.1f}" for v in s.q_fb) + f"  夹爪 {s.g_fb:.0f}mm"
+                       + (f"   还缺: {', '.join(miss)}" if miss else "   必需点位已齐 ✓"))
+
+    wp_name.bind("<<ComboboxSelected>>", on_wp_select)
+    rec_btn = tk.Button(teach, text="记录当前姿态", bg="#00796b", fg="white", relief="flat",
+                        font=("Microsoft YaHei UI", 10, "bold"), command=record_wp)
+    rec_btn.pack(side="left", padx=4)
+    wp_hint.pack(side="left", padx=4)
+
     sp = tk.Frame(root, bg=bg)
     sp.pack(fill="x", padx=12, pady=8)
     tk.Label(sp, text="速度上限 (°/s)", font=("Microsoft YaHei UI", 10), fg=fg, bg=bg).pack(side="left")
@@ -348,6 +384,7 @@ def run_panel(t: Teleop):
         calib_btn.config(state="normal" if s.phase in ("ALIGNING", "READY") else "disabled")
         running = s.phase in ("FOLLOWING", "PAUSED")
         pause_btn.config(state="normal" if running else "disabled")
+        rec_btn.config(state="normal" if running else "disabled")
         home_btn.config(state="normal" if running else "disabled")
         lines = ["         J1      J2      J3      J4      J5      J6"]
         if pre:
